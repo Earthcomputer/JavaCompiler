@@ -1,5 +1,4 @@
-import java.io.BufferedReader;
-import java.io.FileReader;
+import java.io.File;
 import java.io.IOException;
 
 import javax.swing.JFileChooser;
@@ -10,8 +9,15 @@ public class Test {
 
 	public static void main(String[] args) throws IOException {
 		JFileChooser chooser = new JFileChooser();
+		chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+		chooser.setDialogTitle("Input file");
 		chooser.showOpenDialog(null);
-		JavaCompilerExt.compile(new BufferedReader(new FileReader(chooser.getSelectedFile())));
+		File inputFile = chooser.getSelectedFile();
+		chooser.setDialogTitle("Output file");
+		chooser.setCurrentDirectory(null);
+		chooser.showOpenDialog(null);
+		File outputFile = chooser.getSelectedFile();
+		JavaCompilerExt.compile(inputFile, outputFile);
 	}
 
 }
