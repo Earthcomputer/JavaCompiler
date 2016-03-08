@@ -13,10 +13,16 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
+import net.earthcomputer.compiler.internal.AbstractToken;
+import net.earthcomputer.compiler.internal.AbstractToken.TokenType;
+import net.earthcomputer.compiler.internal.IntRef;
 import net.earthcomputer.compiler.internal.JavaTokenizer;
+import net.earthcomputer.compiler.internal.SemiCompiledClass;
 import net.earthcomputer.compiler.internal.UnicodeReplacerReader;
 
 public class JavaCompilerExt {
@@ -46,7 +52,6 @@ public class JavaCompilerExt {
 				}
 			});
 
-			System.out.println("Compiling");
 			final Map<Path, byte[]> outputs = compile(readers);
 
 			System.out.println("Copying non-Java files");
@@ -85,21 +90,100 @@ public class JavaCompilerExt {
 	}
 
 	public static Map<Path, byte[]> compile(Map<Path, Reader> inputs) throws IOException, CompilerException {
-		Map<Path, byte[]> outputs = new HashMap<Path, byte[]>();
+		Map<Path, SemiCompiledClass> semiCompiledClasses = new HashMap<Path, SemiCompiledClass>();
+		System.out.println("Compiling stage 1 <parse to data structure>");
 		for (Map.Entry<Path, Reader> entry : inputs.entrySet()) {
-			outputs.putAll(compileWithoutUnicode(entry.getKey(), new UnicodeReplacerReader(entry.getValue())));
+			System.out.println("-> " + entry.getKey());
+			semiCompiledClasses
+					.putAll(parseToDataStructure(entry.getKey(), new UnicodeReplacerReader(entry.getValue())));
+		}
+
+		System.out.println("Compiling stage 2 <associate data structures with one another>");
+		for (Map.Entry<Path, SemiCompiledClass> entry : semiCompiledClasses.entrySet()) {
+			System.out.println("-> " + entry.getKey());
+			entry.getValue().link(semiCompiledClasses);
+		}
+
+		System.out.println("Compiling stage 3 <convert data structures into bytecode>");
+		Map<Path, byte[]> outputs = new HashMap<Path, byte[]>();
+		for (Map.Entry<Path, SemiCompiledClass> entry : semiCompiledClasses.entrySet()) {
+			System.out.println("-> " + entry.getKey());
+			outputs.put(entry.getKey(), entry.getValue().toBytecode());
 		}
 		return outputs;
 	}
 
-	private static Map<Path, byte[]> compileWithoutUnicode(Path file, Reader input) throws IOException {
+	private static Map<Path, SemiCompiledClass> parseToDataStructure(Path file, Reader input) throws IOException {
+
 		JavaTokenizer tokenizer = new JavaTokenizer(input);
 
+		List<AbstractToken> tokens = new ArrayList<AbstractToken>();
+
 		while (tokenizer.nextToken()) {
-			System.out.println("<" + tokenizer.sval + ">");
+			tokens.add(AbstractToken.forString(tokenizer.line, tokenizer.sval));
 		}
 
-		return new HashMap<Path, byte[]>();
+		return parseTokensToDataStructure(file, tokens);
+	}
+
+	private static Map<Path, SemiCompiledClass> parseTokensToDataStructure(Path file, List<AbstractToken> tokens) {
+		Map<Path, SemiCompiledClass> r = new HashMap<Path, SemiCompiledClass>();
+		IntRef tokenIndex = new IntRef(0);
+
+		String _package = getPackage(tokens, tokenIndex);
+		checkPackageLocation(file, _package);
+
+		return r;
+	}
+
+	private static String getPackage(List<AbstractToken> tokens, IntRef tokenIndex) {
+		if (tokens.size() == 0 || !"package".equals(tokens.get(0).toString()))
+			return "";
+
+		tokenIndex.inc();
+
+		StringBuilder packageBuilder = new StringBuilder();
+
+		try {
+			while (true) {
+				AbstractToken token = tokens.get(tokenIndex.get());
+				if (token.tokenType != TokenType.WORD) {
+					throw new CompilerException("Invalid package declaration format", token.lineNumber);
+				}
+				packageBuilder.append(token.toString());
+				tokenIndex.inc();
+
+				token = tokens.get(tokenIndex.get());
+				if (token.tokenType != TokenType.OPERATOR) {
+					throw new CompilerException("Invalid package declaration format", token.lineNumber);
+				}
+				if (";".equals(token.toString())) {
+					break;
+				} else if (".".equals(token.toString())) {
+					packageBuilder.append('/');
+				} else {
+					throw new CompilerException(
+							"Invalid token in package declaration, " + token + ". Delete this token", token.lineNumber);
+				}
+				tokenIndex.inc();
+			}
+		} catch (IndexOutOfBoundsException e) {
+			throw new CompilerException("End of file reached in the middle of the package declaration!");
+		}
+
+		return packageBuilder.toString();
+	}
+
+	private static void checkPackageLocation(Path file, String _package) {
+		boolean goodPackage;
+		if (_package.isEmpty()) {
+			goodPackage = file.getParent() == null;
+		} else {
+			goodPackage = file.subpath(0, 1).resolveSibling(_package).equals(file.getParent());
+		}
+		if (!goodPackage) {
+			throw new CompilerException("The package declaration does not match the path in the file system");
+		}
 	}
 
 }
