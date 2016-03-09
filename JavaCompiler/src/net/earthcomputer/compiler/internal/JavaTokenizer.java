@@ -47,6 +47,7 @@ public class JavaTokenizer {
 		case ';':
 		case ',':
 		case '.':
+		case '?':
 			sval = String.valueOf((char) c);
 			break;
 		case '\'':
