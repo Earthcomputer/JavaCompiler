@@ -15,11 +15,18 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import net.earthcomputer.compiler.internal.AbstractToken;
 import net.earthcomputer.compiler.internal.AbstractToken.TokenType;
+import net.earthcomputer.compiler.internal.AbstractImport;
+import net.earthcomputer.compiler.internal.AbstractImport.StandardImport;
+import net.earthcomputer.compiler.internal.AbstractImport.StandardWildcardImport;
+import net.earthcomputer.compiler.internal.AbstractImport.StaticImport;
+import net.earthcomputer.compiler.internal.AbstractImport.StaticWildcardImport;
 import net.earthcomputer.compiler.internal.IntRef;
 import net.earthcomputer.compiler.internal.JavaTokenizer;
 import net.earthcomputer.compiler.internal.SemiCompiledClass;
@@ -133,6 +140,8 @@ public class JavaCompilerExt {
 		String _package = getPackage(tokens, tokenIndex);
 		checkPackageLocation(file, _package);
 
+		Set<AbstractImport> imports = getImports(_package, tokens, tokenIndex);
+
 		return r;
 	}
 
@@ -163,14 +172,16 @@ public class JavaCompilerExt {
 					packageBuilder.append('/');
 				} else {
 					throw new CompilerException(
-							"Invalid token in package declaration, " + token + ". Delete this token", token.lineNumber);
+							"Invalid token in package declaration, \"" + token + "\". Delete this token",
+							token.lineNumber);
 				}
 				tokenIndex.inc();
 			}
 		} catch (IndexOutOfBoundsException e) {
-			throw new CompilerException("End of file reached in the middle of the package declaration!");
+			throw new CompilerException("End of file reached in the middle of the package declaration");
 		}
 
+		tokenIndex.inc();
 		return packageBuilder.toString();
 	}
 
@@ -184,6 +195,86 @@ public class JavaCompilerExt {
 		if (!goodPackage) {
 			throw new CompilerException("The package declaration does not match the path in the file system");
 		}
+	}
+
+	private static Set<AbstractImport> getImports(String _package, List<AbstractToken> tokens, IntRef tokenIndex) {
+		Set<AbstractImport> imports = new HashSet<AbstractImport>();
+		imports.add(new StandardWildcardImport("java.lang"));
+		imports.add(new StandardWildcardImport(_package.replace('/', '.')));
+
+		while (tokenIndex.get() < tokens.size() && "import".equals(tokens.get(tokenIndex.get()).toString())) {
+			tokenIndex.inc();
+
+			boolean staticImport = false;
+			boolean wildcardImport = false;
+			StringBuilder importBuilder = new StringBuilder();
+
+			try {
+				AbstractToken token = tokens.get(tokenIndex.get());
+
+				if ("static".equals(token.toString())) {
+					staticImport = true;
+					tokenIndex.inc();
+					token = tokens.get(tokenIndex.get());
+				}
+
+				while (true) {
+					if (token.tokenType == TokenType.OPERATOR && "*".equals(token.toString())) {
+						wildcardImport = true;
+						importBuilder.append('*');
+					} else if (token.tokenType == TokenType.WORD) {
+						if (wildcardImport) {
+							throw new CompilerException(
+									"You can only have the wildcard (*) at the end of the import declaration",
+									token.lineNumber);
+						}
+						importBuilder.append(token.toString());
+					} else {
+						throw new CompilerException("Invalid import declaration format", token.lineNumber);
+					}
+					tokenIndex.inc();
+					token = tokens.get(tokenIndex.get());
+
+					if (";".equals(token.toString())) {
+						break;
+					} else if (".".equals(token.toString())) {
+						importBuilder.append('.');
+					} else {
+						throw new CompilerException(
+								"Invalid token in import declaration, \"" + token + "\". Delete this token",
+								token.lineNumber);
+					}
+					tokenIndex.inc();
+					token = tokens.get(tokenIndex.get());
+				}
+			} catch (IndexOutOfBoundsException e) {
+				throw new CompilerException("End of file reached in the middle of an import declaration");
+			}
+
+			AbstractImport _import;
+			String theImport = importBuilder.toString();
+
+			if (wildcardImport) {
+				theImport = theImport.substring(0, theImport.length() - 2);
+				if (staticImport) {
+					_import = new StaticWildcardImport(theImport);
+				} else {
+					_import = new StandardWildcardImport(theImport);
+				}
+			} else {
+				if (staticImport) {
+					_import = new StaticImport(theImport);
+				} else {
+					_import = new StandardImport(theImport);
+				}
+			}
+			
+			imports.add(_import);
+
+			tokenIndex.inc();
+		}
+
+		return imports;
 	}
 
 }
